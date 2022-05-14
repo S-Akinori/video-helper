@@ -15,15 +15,25 @@ interface TextObject {
   row: number
   column: number
   text: string
+  boxSize: number
+}
+interface PProTextObject {
+  row: number
+  column: number
+  text: string
+  boxSize: number
+  track: number
+  clip: number
 }
 
 const Home: NextPage = () => {
   const { register, handleSubmit, watch, formState: { errors } } = useForm<Inputs>();
   const [columns, setColumns] = useState<number[]>([])
-  const [texts, setTexts] = useState<string[]>([])
   const [textsWithDelimiters, setTextsWithDelimiters] = useState<string[]>([])
   const [fileURL, setFileURL] = useState('');
-  const [jsonFileURL, setJsonFileURL] = useState('');
+  const [textDataJsonURL, setTextDataJsonURL] = useState('');
+  const [slicedTextDataJsonURL, setSlicedTextDataJsonURL] = useState('');
+  const [joinedText, setJoinedText] = useState('');
 
   const onSubmit: SubmitHandler<Inputs> = (data) => {
     const delimiters = data.delimiter.split(',');
@@ -31,51 +41,112 @@ const Home: NextPage = () => {
     //改行でテキストを分ける。改行が複数ある場合空白ができるのでその要素は削除
     const textArray = data.body.split('\n').filter(v => v.trim() !== '');
     const columns: number[] = [];
-    const textObjects: TextObject[] = []
+    const maxStrLen = parseInt(data.maxString)
+    const breakPointChars = ['、', '。', '？', '?', '！', '!', '」', ')']
 
-    //文字数上限のチェック。（本当はこの後のmapと同時にやりたいけど今は応急処置）
-    const maxString = parseInt(data.maxString)
+    // 文字数が1行あたりの最大文字数を超える場合、2行に分ける。
     for(let i = 0; i < textArray.length; i++) {
-      const text = textArray[i]
-      if(textArray[i].length > maxString) {//上限を超えるなら要素を分ける
-        let texts = []
-        const maxString = parseInt(data.maxString);
-        for(let j = 0; j < text.length; j += maxString) {//最大文字数で分割
-          texts.push(text.substring(j, j + maxString))
+      const text = textArray[i].replace(/\s+/g, "");
+      const strLen = text.length
+      if(strLen > maxStrLen) { //2行に分ける場合、句読点などのキリが良い場所で改行する。
+        const halfLength = Math.floor(strLen / 2);
+        let breakPointPosition = 0
+        let minCharDistanceFromMiddle = 100
+        for(let char of breakPointChars) {
+          const charPosition = text.indexOf(char)
+          const charDistanceFromMiddle = Math.abs(charPosition - halfLength);
+          if(charPosition !== -1 && charDistanceFromMiddle < minCharDistanceFromMiddle ) {// バランスを保つため中央に近いところで改行
+            minCharDistanceFromMiddle = charDistanceFromMiddle
+            breakPointPosition = charPosition + 1
+          }
         }
-        for(let k = 0; k < texts.length; k++) {//分割した要素を格納
-          if (k == 0) textArray.splice(i + k, 1, texts[k])
-          else textArray.splice(i + k, 0, texts[k])
+        if(breakPointPosition === 0) { // 句読点などが見つからない場合、半分で改行
+          breakPointPosition = halfLength
         }
+        const text1 = text.slice(0, breakPointPosition);
+        const text2 = text.slice(breakPointPosition);
+        textArray[i] = text1 + "\n" + text2
+      } else {
+        textArray[i] = text
       }
     }
-    const texts = textArray.map(text => {
-      for(let i = 0; i < delimiters.length; i++) {
-        const delimiter = delimiters[i]
-        if(text.trim().indexOf(delimiter) === 0) {// 区切り文字によってcolumnとrowの情報を持ったオブジェクトに変換
-            columns.push(i)
-            textObjects.push({
-              row: textObjects.length,
-              column: i,
-              text: text.slice(1)
-            })
-            return text.slice(1)
-        }
+
+    //テキストデータ生成
+    const textObjects: PProTextObject[] = []
+    const slicedTextObjects: PProTextObject[][] = []
+    const maxBoxSize = 6.5// 最大ボックス数
+    let sliceStart = 0;
+    let boxSize = 0;
+    let currentTrack = 0;
+    let currentClips: number[] = [0,0,0,0,0,0,0,0];
+    for(let i = 0; i < textArray.length; i++) {
+      const text = textArray[i]
+      let size = 1
+      let textObj: PProTextObject = {} as PProTextObject
+      if(text.length > maxStrLen) { //2行時のテロップボックスサイズ
+        size = 1.75
       }
-      columns.push(columns[columns.length - 1]);
-      textObjects.push({
-        row: textObjects.length,
-        column: columns[columns.length - 1],
-        text: text
-      })
-      return text
-    })
+
+      boxSize += size;
+      if(boxSize > maxBoxSize) { //最大テロップを超えた場合、トラック0に初期化
+        currentTrack = 0;
+      }
+
+      const delimiterIndex = getDelimiterIndex(text, delimiters);
+      if(delimiterIndex > -1) {
+        textObj = {
+          row: i,
+          column: delimiterIndex,
+          text: text.slice(0),
+          boxSize: size,
+          track: currentTrack,
+          clip: currentClips[currentTrack]
+        }
+        textObjects.push(textObj)
+        columns.push(delimiterIndex)
+      } else {
+        textObj = {
+          row: i,
+          column: textObjects[textObjects.length - 1].column,
+          text: text,
+          boxSize: size,
+          track: currentTrack,
+          clip: currentClips[currentTrack]
+        }
+        textObjects.push(textObj)
+        columns.push(textObjects[textObjects.length - 1].column)
+      }
+
+      if (i === textArray.length - 1) {
+        slicedTextObjects.push(textObjects.slice(sliceStart, i+1));
+      } else if(boxSize > maxBoxSize) { //最大テロップを超えた場合、シーンを分ける
+        slicedTextObjects.push(textObjects.slice(sliceStart, i))
+        sliceStart = i
+        boxSize = size;
+      }
+
+      currentClips[currentTrack]++;
+      currentTrack++;
+    }
+
     console.log(textObjects)
-    setTexts(texts)
+    console.log(slicedTextObjects)
     setTextsWithDelimiters(textArray);
     setColumns(columns);
     createCSVFile(textObjects)
-    createJSONFile(textObjects)
+    setTextDataJsonURL(createJSONFile(textObjects))
+    setSlicedTextDataJsonURL(createJSONFile(slicedTextObjects))
+    createJoinedText(textArray, delimiters);
+  }
+
+  const getDelimiterIndex = (text: string, delimiters: string[]) => {
+    for(let i = 0; i < delimiters.length; i++) {
+      const delimiter = delimiters[i];
+      if(text.indexOf(delimiter) === 0) {
+        return i;
+      }
+    }
+    return -1;
   }
 
   const createCSVFile = (textObjects: TextObject[]) => {
@@ -85,9 +156,9 @@ const Home: NextPage = () => {
       for(let j = 0; j < maxColumn; j++) {
         const obj = textObjects[i]
         if(j === maxColumn - 1) {
-          csvFile += (obj.column === j) ? obj.text + '\n' : '\n';
+          csvFile += (obj.column === j) ? obj.text.trim() + '\n' : '\n';
         } else {
-          csvFile += (obj.column === j) ? obj.text + ',' : ',';
+          csvFile += (obj.column === j) ? obj.text.trim() + ',' : ',';
         }
       }
     }
@@ -95,12 +166,29 @@ const Home: NextPage = () => {
     const url = URL.createObjectURL(blob);
     setFileURL(url);
   }
-  const createJSONFile = (textObjects: TextObject[]) => {
+
+  const createJSONFile = (textObjects: any) => {
     const jsonFile = JSON.stringify(textObjects, null, '  ');
     const blob = new Blob([jsonFile], {type: "application/json"});
     const url = URL.createObjectURL(blob);
-    setJsonFileURL(url);
+    return url
   }
+  
+  const createJoinedText = (texts: string[], delimiters: string[]) => {
+    let joinedText = '';
+    for(let text of texts) {
+      for(let i = 0; i < delimiters.length; i++) {
+        const delimiter = delimiters[i];
+        if(text.trim().indexOf(delimiter) === 0) {
+          joinedText += '\n'
+          break;
+        }
+      }
+      joinedText += text + '\n'
+    }
+    setJoinedText(joinedText); 
+  }
+
   return (
     <Layout>
       <div className='container mx-auto'>
@@ -109,7 +197,10 @@ const Home: NextPage = () => {
           台本の作成方法
           <ul className='list-disc list-inside py-4'>
             <li>話し手が変わるところで、文章の先頭に「改行」と「区切り文字(a,b,cなど)」を入れる</li>
-            <li>話し手が変わるまでは改行をしない</li>
+            <li>
+              50文字を超える場合、区切りがいい場所で改行を入れる。<br/>
+              Google Documentを使う場合はフォントサイズは「10」、ルーラーの左端を「0」、右端を「17.5」に合わせると、1行が約50文字になる。
+            </li>
           </ul>
           「台本の例」<br /><br />
             Aこんにちはゆっくり霊夢です。<br /><br />
@@ -130,9 +221,9 @@ const Home: NextPage = () => {
           </div>
           <div className='mb-4'>
             <TextField 
-              label="1箱の文字数の上限"
+              label="1行あたりの文字数上限"
               variant="standard" 
-              defaultValue={30}
+              defaultValue={25}
               type="number"
               className='w-1/3'
               inputProps={{ inputMode: 'numeric'}}
@@ -170,22 +261,10 @@ const Home: NextPage = () => {
           )}
         </div>
         <div className='my-4'>
-          <div className='mb-4'>台本</div>
-          {texts.length > 0 && (
-            <TextField 
-              value={texts.join('\n')}
-              multiline
-              minRows={5}
-              maxRows={15}
-              fullWidth
-            />
-          )}
-        </div>
-        <div className='my-4'>
           <div className='mb-4'>台本(識別子あり)</div>
           {textsWithDelimiters.length > 0 && (
             <TextField 
-              value={textsWithDelimiters.join('\n')}
+              value={joinedText}
               multiline
               minRows={5}
               maxRows={15}
@@ -194,7 +273,10 @@ const Home: NextPage = () => {
           )}
         </div>
         <div className='my-4'>
-          {jsonFileURL && <Button href={jsonFileURL} download>台本をjsonファイルで保存</Button>}
+          {textDataJsonURL && <Button href={textDataJsonURL} download>台本データをjsonファイルで保存</Button>}
+        </div>
+        <div className='my-4'>
+          {slicedTextDataJsonURL && <Button href={slicedTextDataJsonURL} download>仕分けした台本をjsonファイルで保存</Button>}
         </div>
         <div className='my-4'>
           {fileURL && <Button href={fileURL} download>台本をCSVファイルで保存</Button>}
