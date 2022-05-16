@@ -97,7 +97,7 @@ const Home: NextPage = () => {
         textObj = {
           row: i,
           column: delimiterIndex,
-          text: text.slice(0),
+          text: text.slice(1),
           boxSize: size,
           track: currentTrack,
           clip: currentClips[currentTrack]
