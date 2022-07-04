@@ -37,7 +37,7 @@ const Layout = ({
       </Head>
       <Header />
       <main>
-        <div className={`py-16 ${className}`} style={style}>
+        <div className={`py-16 px-4 ${className}`} style={style}>
           {children}
         </div>
       </main>
